@@ -33,8 +33,8 @@ flowchart LR
 
 **Plain files + git as the database.** Markdown is readable by people, any
 editor and any model; git gives history, diffs, blame and revert for every
-agent edit. No server, no schema migration, no lock-in. An agent's change
-is reviewable like a colleague's.
+agent edit, so an agent's change is reviewed and reverted like a
+colleague's. There is no server or schema to maintain.
 
 **Instructions in files, not prompts.** Behaviour lives in `CLAUDE.md`,
 skills and the agent definition, versioned with the content they act on.
@@ -50,14 +50,18 @@ contract between the two is a few machine-readable trailer lines.
 requests). The linter and the bridge run on a bare Python, so the tools
 that detect breakage can't be broken by a bad virtualenv.
 
-**Fail soft at the edges, loud at the core.** A missing embedding service
-silently drops a search layer and a failed progress comment is ignored,
-but a missing API key stops the bridge with a clear message, and a failed
-agent run is posted to the card instead of vanishing.
+**Optional parts fail quietly, required parts fail loudly.** A missing
+embedding service drops one search layer and a failed progress comment is
+ignored. A missing API key stops the bridge with a clear message, and a
+crashed run is reported on the card and handed back to you instead of being
+retried every minute.
 
-**Human in the loop by construction.** The agent can't close cards, push,
-or send messages on its own; review rounds and pass counts are capped in
-code, not in the prompt.
+**Limits in code where possible, rules in prompts where not.** Enforced by
+the bridge: the agent's reply can't move a card to Done/Parked, pass and
+review counts are capped, `ATTACH:` only uploads files from the repo or the
+temp dir, and the agent's environment doesn't contain the board API key.
+Only instructions (`CLAUDE.md`): don't push, don't send messages. The agent
+has a shell, so instructions are not a sandbox; see [SECURITY.md](../SECURITY.md).
 
 ## Data flow of one card
 

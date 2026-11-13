@@ -6,7 +6,7 @@ About 15 minutes for the knowledge base, another 20 for the Planka board.
 
 | Needed for | What |
 |---|---|
-| everything | Linux or macOS, bash, git, Python 3.10+ |
+| everything | Linux (uses GNU `date`, `find` and `flock`; macOS would need coreutils), bash, git, Python 3.10+ |
 | the agent | [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude` on PATH, logged in) |
 | semantic search (optional) | [Ollama](https://ollama.com) and ~1.2 GB for the `bge-m3` model |
 | task cards (optional) | Docker, for Planka |

@@ -6,8 +6,8 @@ for handing that agent real work from your phone.**
 Built on [Claude Code](https://docs.claude.com/en/docs/claude-code), plain
 markdown and git. It's a working implementation of Andrej Karpathy's
 [LLM wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f),
-extended with the parts that a wiki needs to survive months of agent edits:
-task memory, hybrid search, linting, and a human-in-the-loop task queue.
+extended with task memory, hybrid search, linting, and a task queue where
+a human approves the agent's work.
 
 ```
  you, in a terminal ───────────────────────────► claude ─┐
@@ -16,6 +16,11 @@ task memory, hybrid search, linting, and a human-in-the-loop task queue.
         └─── reply comment + STATUS line ◄─── repo: raw/ ─distill─► knowledge/
                                                     memory/ (task state), git commit per change
 ```
+
+![A task card after the agent's answer and an independent review verdict](docs/img/demo-card.png)
+
+*A demo card: the agent answered, the user added a constraint, the same
+session revised the answer, and a separate reviewer session checked it.*
 
 ## What it does
 
@@ -34,8 +39,31 @@ task memory, hybrid search, linting, and a human-in-the-loop task queue.
   board. A cron bridge runs a headless Claude Code session per card, posts
   the answer as a comment, and moves the card. Comment again and the *same*
   session continues. The agent can loop (`STATUS: continue`, max 10 passes)
-  or request an independent reviewer (`STATUS: review`, max 2 rounds), but
-  only you can close a card.
+  or request an independent reviewer (`STATUS: review`, max 2 rounds), and
+  never closes a card itself.
+
+## Engineering highlights
+
+What to look at if you are evaluating the code rather than using it:
+
+- **A small, testable contract between code and model.** The agent ends its
+  reply with `STATUS:` / `ATTACH:` / `LABEL:` lines; everything else is
+  free text. [`split_status`](scripts/planka/planka_board.py) parses them,
+  and any status the code doesn't allow becomes "waiting".
+- **Resumable sessions without a database.** The Claude session id is a
+  UUIDv5 of the card id ([`session_id`](scripts/planka/planka_board.py)), so
+  a follow-up comment resumes the same conversation.
+- **Bounded autonomy.** Pass and review budgets live in code and are saved
+  before each run, so a crashing card stops instead of looping. A reviewer
+  in a fresh session, without editing tools, approves or returns the work.
+- **Least privilege for the agent.** No board API key in its environment,
+  uploads only from the repo, `.env` denied to the file tools, and
+  credentials listed by name, never printed
+  ([`secrets.sh`](scripts/secrets.sh)).
+- **Tests on the decisions.** The bridge's card handling (comments arriving
+  mid-run, crash recovery, budgets) runs against an in-memory fake Planka
+  ([`test_bridge_flow.py`](tests/test_bridge_flow.py)); CI runs ruff,
+  shellcheck, the wiki linter, pytest on Python 3.10 and 3.13, and gitleaks.
 
 ## Quick start
 

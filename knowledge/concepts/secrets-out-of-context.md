@@ -25,6 +25,8 @@ The rule here is **the agent may know a secret exists, not what it is**:
   accidents, not a sandbox: a determined shell command could still read
   the file (see `SECURITY.md`).
 
-Long-running code like the Planka bridge doesn't use the script at all: it
-gets its settings from the environment its cron wrapper loads. Related:
+Long-running code like the Planka bridge doesn't use the script: it gets its
+settings from the environment its cron wrapper loads, and removes its own
+`PLANKA_*` settings from the environment it gives the agent. Claude Code's
+login token has to stay there, since the CLI needs it. Related:
 [[lint-as-guardrail]] (checks over prompts), [[kanban-agent-loop]].
