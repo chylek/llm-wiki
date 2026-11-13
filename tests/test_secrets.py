@@ -13,11 +13,11 @@ def run(tmp_path, *args):
 
 
 def test_list_hides_values_and_lookup_returns_one(tmp_path):
-    (tmp_path / "env").write_text("# Planka bot key\nAPI_KEY=s3cret=with=equals\nEMPTY_ONE=\n")
+    (tmp_path / "env").write_text("# Planka bot key\nTOKEN=hidden=value\nEMPTY_ONE=\n")
     listing = run(tmp_path).stdout
-    assert "s3cret" not in listing
-    assert "API_KEY" in listing and "set" in listing and "Planka bot key" in listing
+    assert "hidden" not in listing
+    assert "TOKEN" in listing and "set" in listing and "Planka bot key" in listing
     assert "EMPTY" in listing
-    assert run(tmp_path, "API_KEY").stdout == "s3cret=with=equals\n"
+    assert run(tmp_path, "TOKEN").stdout == "hidden=value\n"
     missing = run(tmp_path, "EMPTY_ONE")
     assert missing.returncode == 1 and missing.stdout == ""

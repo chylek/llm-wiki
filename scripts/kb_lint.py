@@ -38,6 +38,7 @@ ROOT_ALLOWED = {
     ".claude",
     ".github",
     ".gitignore",
+    ".gitleaksignore",
     ".env.example",
     "CLAUDE.md",
     "README.md",
