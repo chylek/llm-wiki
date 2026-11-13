@@ -1,0 +1,17 @@
+# Secrets and machine-local settings
+.env
+.env.*
+!.env.example
+deploy/planka/.env
+.claude/settings.local.json
+
+# Planka container volumes
+deploy/planka/data/
+deploy/planka/db/
+
+# Generated
+.venv/
+.index/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

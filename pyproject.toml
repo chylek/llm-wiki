@@ -1,0 +1,16 @@
+# Tooling config only: this repo is a set of scripts, not an installable package.
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, builtins-shadowing,
+# naming, and blind-except - strict enough to catch real bugs, quiet about taste.
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "A", "N", "BLE"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

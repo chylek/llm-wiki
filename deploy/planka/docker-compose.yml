@@ -1,0 +1,38 @@
+# Minimal self-hosted Planka for the card workflow.
+#   cp .env.example .env   # fill in SECRET_KEY and the admin account
+#   docker compose up -d   # then open http://localhost:3000
+# Planka is licensed separately (Planka "Fair Use License"); this file only
+# runs the official image.
+services:
+  planka:
+    image: ghcr.io/plankanban/planka:2.2.1
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
+      - DATABASE_URL=postgresql://postgres@postgres/planka
+      - DEFAULT_LANGUAGE=en-US
+    volumes:
+      - ./data:/app/data
+    ports:
+      # Bound to localhost: put a reverse proxy with TLS in front before
+      # exposing it to a LAN or VPN.
+      - 127.0.0.1:3000:1337
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=planka
+      # Fine on the private compose network: postgres publishes no port.
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d planka"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

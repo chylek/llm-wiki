@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Block commits that break the knowledge-base conventions (broken or
+# path-style [[links]], missing frontmatter, misplaced files). Warnings
+# never block. Enable once per clone:
+#   git config core.hooksPath scripts/githooks
+# Bypass once with: git commit --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 0
+if ! out=$(python3 scripts/kb_lint.py --errors-only); then
+    echo "$out" >&2
+    echo "pre-commit: kb-lint found errors (fix them, or commit --no-verify)" >&2
+    exit 1
+fi

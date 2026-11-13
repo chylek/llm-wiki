@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in the scripts, skills or Planka bridge doesn't work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. scripts/search.sh "..."
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Knowledge-base scripts (capture, search, lint, ...)
+        - Semantic search (Ollama / Chroma)
+        - Planka bridge
+        - Claude Code skills / agent / hooks
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, `claude --version`, Planka version if relevant.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output. Remove API keys, tokens and private hostnames first.
+      render: text
