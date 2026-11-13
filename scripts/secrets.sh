@@ -19,8 +19,10 @@ file="${SECRETS_FILE:-.env}"
 [[ -f "$file" ]] || { echo "no $file (copy .env.example)" >&2; exit 1; }
 
 if [[ $# -eq 1 ]]; then
-    # Last assignment wins, as when the file is sourced.
-    value=$(grep -E "^$1=" "$file" | tail -1 | cut -d= -f2-) || true
+    # Exact key match (not a regex), last assignment wins, and one layer of
+    # surrounding quotes is removed - all as when bash sources the file.
+    value=$(awk -v k="$1" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END {
+        if (v ~ /^".*"$/ || v ~ /^\x27.*\x27$/) v = substr(v, 2, length(v) - 2); print v }' "$file")
     [[ -n "$value" ]] || { echo "$1 is not set in $file" >&2; exit 1; }
     printf '%s\n' "$value"
     exit 0

@@ -88,14 +88,14 @@ def frontmatter(text: str) -> dict[str, str] | None:
     for line in text[4:end].splitlines():
         if ":" in line and not line.startswith((" ", "\t", "#")):
             key, val = line.split(":", 1)
-            fm[key.strip()] = val.split("#")[0].strip()
+            fm[key.strip()] = re.split(r"\s#", val)[0].strip()  # "C# tips" keeps its "#"
     return fm
 
 
 def parse_ts(value: str) -> dt.datetime | None:
     """ISO-8601 timestamp -> aware datetime (naive ones are taken as UTC)."""
     try:
-        ts = dt.datetime.fromisoformat(value)
+        ts = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))  # 3.10 rejects "Z"
     except ValueError:
         return None
     return ts if ts.tzinfo else ts.replace(tzinfo=dt.timezone.utc)

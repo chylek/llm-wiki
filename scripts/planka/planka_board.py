@@ -43,8 +43,10 @@ import json
 import mimetypes
 import os
 import re
+import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -60,9 +62,10 @@ from typing import Any, TextIO
 #: Repository root: the agent's working directory, where CLAUDE.md lives.
 REPO = Path(__file__).resolve().parents[2]
 
-#: Where Claude Code keeps session transcripts for this repo. A transcript
-#: file existing means the card's session can be resumed.
-SESSIONS = Path.home() / ".claude" / "projects" / str(REPO).replace("/", "-")
+#: Where Claude Code keeps session transcripts for this repo (it replaces every
+#: non-alphanumeric character of the path with "-"). A transcript file
+#: existing means the card's session can be resumed.
+SESSIONS = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(REPO))
 
 #: Per-machine runtime state (locks, counters, downloaded attachments).
 STATE_ROOT = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "llm-wiki"
@@ -242,18 +245,56 @@ def step_line(block: dict[str, Any]) -> str:
     return f"- {block['name']}: {' '.join(detail.split())[:90]}".rstrip(": ")
 
 
-def needs_agent(list_role: str | None, comments: list[dict[str, Any]], bot_id: str) -> bool:
+def new_user_comments(comments: list[dict[str, Any]], bot_id: str, seen: str) -> list[dict[str, Any]]:
+    """User comments the agent has not been shown yet.
+
+    ``seen`` is the ``createdAt`` of the newest comment that went into the
+    last prompt. Comparing against it (instead of "after the bot's last
+    comment") also catches comments written *while* the agent was running:
+    those are older than the bot's reply but newer than ``seen``. Without a
+    marker (first run, or state lost) everything after the bot's last comment
+    counts as new. Planka timestamps are ISO 8601 UTC, so strings compare.
+    """
+    if not seen:
+        last_bot = max((i for i, c in enumerate(comments) if c["userId"] == bot_id), default=-1)
+        return [c for c in comments[last_bot + 1 :] if c["userId"] != bot_id]
+    return [c for c in comments if c["userId"] != bot_id and c["createdAt"] > seen]
+
+
+def needs_agent(list_role: str | None, comments: list[dict[str, Any]], bot_id: str, seen: str = "") -> bool:
     """Does a card in this list, with these comments, need an agent run?
 
     Yes when it is new (Inbox), was interrupted (Working), awaits review
-    (Review), or anywhere else when the newest comment isn't the bot's
-    (the user replied). Draft and unknown lists are never touched.
+    (Review), or anywhere else when the user wrote something the agent
+    hasn't seen. Draft and unknown lists are never touched.
     """
     if list_role in (None, "draft"):
         return False
     if list_role in ("inbox", "working", "review"):
         return True
-    return bool(comments) and comments[-1]["userId"] != bot_id
+    return bool(new_user_comments(comments, bot_id, seen))
+
+
+def attachable(path: str) -> Path | None:
+    """An ``ATTACH:`` path the bridge may upload, or None.
+
+    Only files inside the repository or the temp dir, and never ``.env*``:
+    a prompt-injected card must not be able to make the agent post
+    ``~/.ssh/id_ed25519`` or the bridge's own credentials to the board.
+    """
+    p = Path(path).expanduser().resolve()
+    inside = any(p.is_relative_to(root) for root in (REPO, Path(tempfile.gettempdir()).resolve()))
+    return p if inside and p.is_file() and not p.name.startswith(".env") else None
+
+
+def agent_env() -> dict[str, str]:
+    """Environment for the agent: ours minus the bridge's own settings.
+
+    The agent never needs the board API key (it answers through its final
+    message), so it doesn't get it. Claude Code's own credentials have to
+    stay: the CLI can't run without them.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("PLANKA_") and k != "NOTIFY_COMMAND"}
 
 
 # --------------------------------------------------------------------------
@@ -278,12 +319,14 @@ def lock(card_id: str) -> TextIO | None:
 
 
 def fresh_counters() -> dict[str, Any]:
-    return {"work": 0, "review": 0, "notes": ""}
+    """Per-card state: passes and reviews used this user turn, reviewer notes
+    for the author, and the newest comment timestamp the agent has seen."""
+    return {"work": 0, "review": 0, "notes": "", "seen": ""}
 
 
 def load_counters(card_id: str) -> dict[str, Any]:
     try:
-        return json.loads((COUNTERS / f"{card_id}.json").read_text())
+        return {**fresh_counters(), **json.loads((COUNTERS / f"{card_id}.json").read_text())}
     except (OSError, ValueError):
         return fresh_counters()
 
@@ -337,7 +380,10 @@ class Bridge:
             path = folder / f"{att['id']}-{Path(att['name']).name}"  # .name strips any path parts
             if att["type"] != "file" or path.exists():
                 continue
-            path.write_bytes(self.planka.download(att["data"]["url"]))
+            # Write then rename: an interrupted download must not look "seen".
+            part = path.with_name(path.name + ".part")
+            part.write_bytes(self.planka.download(att["data"]["url"]))
+            part.rename(path)
             new.append(path)
         return new
 
@@ -364,12 +410,16 @@ class Bridge:
 
     # -- running the agent ------------------------------------------------
 
-    def run_claude(self, card_id: str, prompt: str, sid: str, resume: bool, model: str = "") -> str:
+    def run_claude(
+        self, card_id: str, prompt: str, sid: str, resume: bool, model: str = "", read_only: bool = False
+    ) -> str:
         """Run one headless Claude Code turn and return its final text.
 
         Output is consumed as ``stream-json`` so progress can be shown while
         it runs: every ``PROGRESS_EVERY`` seconds a single "Working..." comment
         is created or edited with the latest tool calls, and deleted at the end.
+        ``read_only`` (the reviewer) removes the file-editing tools; Bash stays,
+        so that's a strong hint plus a guard against slips, not a sandbox.
         """
         cmd = [
             "claude", "-p", prompt,
@@ -379,10 +429,26 @@ class Bridge:
         ]  # fmt: skip
         if model:
             cmd += ["--model", model]
+        if read_only:
+            cmd += ["--disallowedTools", "Edit,Write,NotebookEdit"]
+        stderr = tempfile.TemporaryFile("w+")  # noqa: SIM115 - read back after the run
+        # Own process group, so the timeout also kills whatever the agent started.
         proc = subprocess.Popen(
-            cmd, cwd=REPO, stdout=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            cmd,
+            cwd=REPO,
+            env=agent_env(),
+            stdout=subprocess.PIPE,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
         )
-        killer = threading.Timer(TIMEOUT, proc.kill)
+
+        def kill_group() -> None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+
+        killer = threading.Timer(TIMEOUT, kill_group)
         killer.start()
         start, last_post, steps, shown = time.time(), 0.0, [], 0
         progress_id: str | None = None
@@ -422,8 +488,14 @@ class Bridge:
             if progress_id:
                 with contextlib.suppress(OSError):
                     self.planka.call("DELETE", f"/comments/{progress_id}")
+        stderr.seek(0)
+        tail = stderr.read()[-500:].strip()
+        stderr.close()
         if result is None:
-            return f"Run failed (no result, exit code {proc.returncode}); session {sid}.\n\nSTATUS: waiting"
+            return (
+                f"Run failed (no result, exit code {proc.returncode}); session {sid}.\n"
+                f"{tail and f'stderr: {tail}'}\n\nSTATUS: waiting"
+            )
         if result.get("is_error"):
             return f"Run failed: {result.get('result')}\n\nSTATUS: waiting"
         return "\n\n".join([*earlier, result["result"]])
@@ -448,38 +520,64 @@ information from the user, ask for it and stop.
 
 {reply_rules(self.link_base)}"""
 
-    def followup_prompt(self, comments: list[dict[str, Any]], files: list[Path]) -> str:
-        """Prompt for a resumed session: only what the user said since the bot's last comment."""
-        last_bot = max((i for i, c in enumerate(comments) if c["userId"] == self.bot_id), default=-1)
-        new = "\n\n".join(c["text"] for c in comments[last_bot + 1 :]) or "(no new comment)"
+    def followup_prompt(self, new_comments: list[dict[str, Any]], files: list[Path]) -> str:
+        """Prompt for a resumed session: only what the user said that it hasn't seen."""
+        new = "\n\n".join(c["text"] for c in new_comments) or "(no new comment)"
         attached = ("\n\nNew attachments on the card (Read them):\n" + "\n".join(map(str, files))) if files else ""
         return f"The user replied on the card:\n\n{new}{attached}\n\n{reply_rules(self.link_base)}"
 
     # -- worker -------------------------------------------------------------
 
     def work(self, card_id: str) -> None:
-        """Worker entry point: handle one card while holding its lock."""
+        """Worker entry point: handle one card while holding its lock.
+
+        Any unexpected error is reported on the card and the card handed to the
+        user. Without that, a card left in Working would be retried every
+        minute; if even that report fails (Planka down), the pass and review
+        budgets below still bound the retries.
+        """
         held = lock(card_id)
         if held is None:
             return  # another worker has it
+        try:
+            self._work(card_id)
+        except Exception as exc:  # noqa: BLE001 - report anything, then re-raise for the log
+            with contextlib.suppress(Exception):
+                _, role_to_id, _ = self.board()
+                self.comment(card_id, f"⚠️ The bridge failed on this card: {type(exc).__name__}: {exc}")
+                self.move(card_id, role_to_id["waiting"])
+            raise
+
+    def _work(self, card_id: str) -> None:
         inc, role_to_id, id_to_role = self.board()
         card = next((c for c in inc["cards"] if c["id"] == card_id), None)
         if card is None:
             return
         role = id_to_role.get(card["listId"])
         comments = self.comments(card_id)
-        if not needs_agent(role, comments, self.bot_id):
+        counters = load_counters(card_id)
+        if not needs_agent(role, comments, self.bot_id, counters["seen"]):
             return  # answered or moved since the dispatcher looked
 
-        # A "user turn" starts when the card is new or the user just replied:
-        # that resets the pass/review budget.
-        user_turn = role == "inbox" or not comments or comments[-1]["userId"] != self.bot_id
-        counters = fresh_counters() if user_turn else load_counters(card_id)
+        # A "user turn" starts when the card is new or the user wrote something
+        # new: that resets the pass/review budget (not the seen marker).
+        new = new_user_comments(comments, self.bot_id, counters["seen"])
+        user_turn = role == "inbox" or bool(new)
+        if user_turn:
+            counters = {**fresh_counters(), "seen": counters["seen"]}
+        elif (role == "working" and counters["work"] >= MAX_WORK) or (
+            role == "review" and counters["review"] >= MAX_REVIEW
+        ):
+            # A normal run never leaves a card here with its budget spent, so
+            # this is a crash loop (runs that never got their reply posted).
+            self.comment(card_id, "⚠️ Run budget used up without a result; handing over.")
+            self.move(card_id, role_to_id["waiting"])
+            return
         try:
             model = self.model_for(card_id)
         except OSError:
             model = ""
-        if role == "review":
+        if role == "review" and not user_turn:
             return self.review(card, comments, role_to_id, counters, model)
 
         self.move(card_id, role_to_id["working"])
@@ -497,7 +595,7 @@ information from the user, ask for it and stop.
 
         if user_turn or not resume:
             files = self.fetch_attachments(card_id)
-            prompt = self.followup_prompt(comments, files) if resume else self.first_prompt(card, comments, files)
+            prompt = self.followup_prompt(new, files) if resume else self.first_prompt(card, comments, files)
         elif counters["notes"]:  # back from a "rework" review
             prompt = f"The independent reviewer sent this back:\n\n{counters['notes']}\n\nFix it.\n\n"
             prompt += reply_rules(self.link_base)
@@ -505,6 +603,9 @@ information from the user, ask for it and stop.
             prompt = "Continue the task: re-check your work against the card and finish what is left.\n\n"
             prompt += reply_rules(self.link_base)
         counters["notes"] = ""
+        # "0" sorts before every timestamp: the card had no comments, so all later ones are new.
+        counters["seen"] = comments[-1]["createdAt"] if comments else "0"
+        save_counters(card_id, counters)  # before the run: a crash still counts against the budget
         budget = f"(Pass {counters['work']}/{MAX_WORK}, reviews so far {counters['review']}/{MAX_REVIEW}.)"
         prompt += f"{ask_label}\n\n{budget}"
 
@@ -517,14 +618,16 @@ information from the user, ask for it and stop.
             status, text = "waiting", text + f"\n\n(Limit of {MAX_REVIEW} reviews reached, handing over.)"
         if status == "continue":
             text = f"🔁 Pass {counters['work']}/{MAX_WORK}\n\n{text}"
-        save_counters(card_id, counters)
 
         if label in labels and card_id not in labelled:
             self.planka.call("POST", f"/cards/{card_id}/card-labels", {"labelId": labels[label]})
         for path in attach:
+            ok = attachable(path)
             try:
-                self.planka.upload(card_id, Path(path))
-            except OSError as exc:  # missing file or upload error: say so, keep going
+                if ok is None:
+                    raise OSError("not a file inside the repo or temp dir")
+                self.planka.upload(card_id, ok)
+            except OSError as exc:  # missing/forbidden file or upload error: say so, keep going
                 text += f"\n\n(Couldn't attach {path}: {exc})"
         self.comment(card_id, text)
         self.move(card_id, role_to_id.get(STATUS_TO_LIST[status], role_to_id["waiting"]))
@@ -539,8 +642,13 @@ information from the user, ask for it and stop.
         counters: dict[str, Any],
         model: str,
     ) -> None:
-        """Independent review: a fresh session per round, its verdict moves the card."""
+        """Independent review: a fresh session per round, its verdict moves the card.
+
+        A "rework" verdict resets the author's pass budget, so one user turn can
+        take up to (MAX_REVIEW + 1) * MAX_WORK passes in the worst case.
+        """
         counters["review"] += 1
+        save_counters(card["id"], counters)  # before the run, so crashes count
         thread = "\n\n".join(f"[{'author' if c['userId'] == self.bot_id else 'user'}] {c['text']}" for c in comments)
         prompt = (
             f"{REVIEW_RULES}\n\nCard {card['id']}\nTitle: {card['name']}\nDescription:\n"
@@ -548,7 +656,7 @@ information from the user, ask for it and stop.
             f"Thread (the last author comment is the claim to check):\n{thread}"
         )
         # A new random session each round: the reviewer must not inherit context.
-        out = self.run_claude(card["id"], prompt, str(uuid.uuid4()), False, model)
+        out = self.run_claude(card["id"], prompt, str(uuid.uuid4()), False, model, read_only=True)
         verdict, findings = parse_verdict(out)
         self.comment(card["id"], f"🔍 Review {counters['review']}/{MAX_REVIEW}: {verdict}\n\n{findings}")
         if verdict == "rework":  # notes go to the author's next pass, with a fresh pass budget
@@ -566,7 +674,10 @@ information from the user, ask for it and stop.
         todo, running = [], 0
         for card in inc["cards"]:
             role = id_to_role.get(card["listId"])
-            if role in (None, "draft") or not needs_agent(role, self.comments(card["id"]), self.bot_id):
+            if role in (None, "draft"):
+                continue
+            seen = load_counters(card["id"])["seen"]
+            if not needs_agent(role, self.comments(card["id"]), self.bot_id, seen):
                 continue
             held = lock(card["id"])
             if held is None:

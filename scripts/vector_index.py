@@ -149,7 +149,9 @@ def reindex(collection: chromadb.Collection, root: Path) -> tuple[int, int]:
         for heading, text in chunk_markdown(path.read_text(encoding="utf-8")):
             cid = f"{rel}::{heading}"
             seen_ids.add(cid)
-            digest = hashlib.sha256(text.encode()).hexdigest()
+            # The model is part of the hash: switching EMBED_MODEL re-embeds
+            # everything instead of mixing vectors from two models.
+            digest = hashlib.sha256(f"{EMBED_MODEL}\n{text}".encode()).hexdigest()
             existing = collection.get(ids=[cid], include=["metadatas"])
             if existing["ids"] and existing["metadatas"][0].get("hash") == digest:
                 continue  # unchanged: skip the embedding call

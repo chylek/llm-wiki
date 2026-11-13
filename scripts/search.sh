@@ -21,14 +21,17 @@ fi
 
 # --- 1. lexical ------------------------------------------------------------
 content_hits=$(grep -rli --include='*.md' -F -- "$term" knowledge memory raw 2>/dev/null || true)
-tag_hits=$(grep -rli --include='*.md' -E "^tags:.*$term" knowledge memory raw 2>/dev/null || true)
+# Escape regex metacharacters: the term is text, not a pattern.
+# shellcheck disable=SC2016 # the $ is a literal inside the sed bracket expression
+term_re=$(printf '%s' "$term" | sed 's/[][\.*^$(){}?+|/]/\\&/g')
+tag_hits=$(grep -rli --include='*.md' -E "^tags:.*$term_re" knowledge memory raw 2>/dev/null || true)
 all_hits=$(printf '%s\n%s\n' "$content_hits" "$tag_hits" | sed '/^$/d' | sort -u)
 
 # --- 2. graph: one hop of [[wikilinks]] out of every direct hit -------------
 related=""
 if [[ -n "$all_hits" ]]; then
     linked=$(while IFS= read -r f; do
-        grep -o '\[\[[^]]*\]\]' "$f" 2>/dev/null | tr -d '[]' | cut -d'|' -f1 || true
+        grep -o '\[\[[^]]*\]\]' "$f" 2>/dev/null | tr -d '[]' | cut -d'|' -f1 | cut -d'#' -f1 || true
     done <<< "$all_hits" | sort -u)
     while IFS= read -r slug; do
         [[ -z "$slug" ]] && continue
