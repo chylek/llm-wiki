@@ -26,7 +26,10 @@ repository, triggered by text on a kanban board. Treat it accordingly:
   if you prefer, or run the bridge as a dedicated low-privilege user,
   ideally in a container or VM.
 - **Secrets.** All credentials come from `.env` (gitignored) or the
-  environment. Don't store secrets in notes: notes are read into model
+  environment. The agent looks them up with `scripts/secrets.sh`, which
+  lists names without values, and uses a value only inside `$(...)`; the
+  Read/Edit tools are denied on `.env`. This prevents accidental leaks into
+  transcripts, not a deliberate shell read. Don't store secrets in notes: notes are read into model
   context and may be sent to the model provider.
 - **Data leaves the machine** when the agent reads it: card text, notes and
   files the agent opens are sent to the model API. Embeddings for search

@@ -39,7 +39,9 @@ first, and write messages that say what changed and why. Run
 
 ## Never
 
-- Commit credentials. Secrets live in `.env` (gitignored) and are read from
-  the environment.
+- Commit credentials. Secrets live in `.env` (gitignored).
+- Print a secret. `scripts/secrets.sh` lists which keys exist (without
+  values); use a value only inside a command, `$(scripts/secrets.sh KEY)`,
+  so it never appears in output. Never `cat`, `grep` or `echo` `.env`.
 - Send email, post publicly, or push to a remote unless the owner asked for
   that specific action.

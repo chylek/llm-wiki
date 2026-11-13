@@ -69,6 +69,7 @@ CLAUDE.md                 agent working rules, loaded into every session
 knowledge/  memory/  raw/  artifacts/     the wiki itself (see each README)
 scripts/
   capture.sh inbox.sh new-note.sh search.sh session-brief.sh
+  secrets.sh              list credential names / use a value without printing it
   kb_lint.py              convention checks (stdlib only)
   vector_index.py         Ollama + Chroma semantic index
   planka/                 Planka <-> Claude Code bridge, cron wrapper, board setup

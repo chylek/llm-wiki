@@ -20,6 +20,8 @@ order:
    checks, not prompts, keep conventions
 8. [Kanban board as the agent's task queue](../knowledge/concepts/kanban-agent-loop.md):
    bounded autonomy with review
+9. [Keeping secrets out of the agent's context](../knowledge/concepts/secrets-out-of-context.md):
+   the agent knows which key exists, not its value
 
 ## Claude Code terms used here
 

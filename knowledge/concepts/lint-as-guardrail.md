@@ -21,4 +21,5 @@ a link to a renamed note, a missing timestamp, a PNG dropped into
 
 It is stdlib-only on purpose: the linter must not depend on the same
 virtualenv whose breakage it may need to report. See
-[[wikilinks-and-slugs]] and [[atomic-notes]] for the rules it checks.
+[[wikilinks-and-slugs]] and [[atomic-notes]] for the rules it checks, and
+[[secrets-out-of-context]] for the same idea applied to credentials.
