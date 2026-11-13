@@ -2,7 +2,7 @@
 title: Kanban board as the agent's task queue
 tags: [agents,planka,automation,human-in-the-loop]
 created: 2026-11-13T09:30:00+01:00
-updated: 2026-11-13T09:30:00+01:00
+updated: 2026-11-13T17:40:00+01:00
 ---
 
 # Kanban board as the agent's task queue
@@ -21,8 +21,9 @@ headless Claude Code:
   `STATUS: waiting|continue|review`, and the bridge moves the card.
 - **Bounded autonomy.** `continue` re-runs the agent (max 10 passes);
   `review` asks a *fresh* session with no access to the author's reasoning
-  to check the result against the card (max 2 rounds). Budgets prevent
-  runaway loops.
+  to check the result against the card (max 2 rounds). Review is the
+  default whenever a turn changed files, enforced by the bridge: agents
+  rarely volunteer that they might be wrong. Budgets prevent runaway loops.
 - **Human owns closure.** The agent can't move cards to Done or Parked.
 
 Long cards work because the agent records progress in

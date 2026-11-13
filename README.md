@@ -39,8 +39,8 @@ session revised the answer, and a separate reviewer session checked it.*
   board. A cron bridge runs a headless Claude Code session per card, posts
   the answer as a comment, and moves the card. Comment again and the *same*
   session continues. The agent can loop (`STATUS: continue`, max 10 passes)
-  or request an independent reviewer (`STATUS: review`, max 2 rounds), and
-  never closes a card itself.
+  and any turn that changed files goes to an independent reviewer first
+  (`STATUS: review`, max 2 rounds). It never closes a card itself.
 
 ## Engineering highlights
 

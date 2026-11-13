@@ -100,7 +100,15 @@ from the visible comment:
 | `LABEL: <name>` | label applied if the card has none |
 | `STATUS: waiting` | → Waiting on you (also the default for a missing/unknown status) |
 | `STATUS: continue` | stays in Working; the same session runs again next minute |
-| `STATUS: review` | → Review; a fresh session checks the work |
+| `STATUS: review` | → Review; a fresh session checks the work. The default for any turn that changed files |
+
+**Review is the default for changes.** When review was opt-in ("ask if
+you're unsure"), the agent almost never asked: two reviews in about 140
+replies on the author's own board. Now the rules make `review` the default
+whenever a turn changed files, and the bridge enforces it: if the session
+used Edit/Write/NotebookEdit outside `memory/` and `raw/` and still replied
+`waiting`, the card goes to Review anyway (while the review budget lasts).
+Answers and questions to you still come straight back.
 
 `STATUS: done` or `parked` is downgraded to `waiting`: closing is your call.
 

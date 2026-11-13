@@ -52,7 +52,12 @@ def bridge(tmp_path, monkeypatch):
     def make(list_role, agent):
         b = object.__new__(pb.Bridge)  # skip __init__: no env, no network
         b.planka, b.bot_id, b.board_id, b.link_base, b.notify_cmd = FakePlanka(list_role), BOT, "b1", "", ""
-        b.run_claude = lambda card_id, prompt, *a, **kw: agent(b.planka, prompt)
+
+        def run(card_id, prompt, *a, **kw):
+            out = agent(b.planka, prompt)
+            return out if isinstance(out, tuple) else (out, False)  # (text, edited work files)
+
+        b.run_claude = run
         return b
 
     return make
@@ -127,3 +132,19 @@ def test_agent_env_drops_bridge_settings(monkeypatch):
     env = pb.agent_env()
     assert "PLANKA_API_KEY" not in env and "NOTIFY_COMMAND" not in env
     assert env.get("PATH") == os.environ["PATH"]
+
+
+def test_changed_files_go_to_review_by_default(bridge):
+    b = bridge("inbox", lambda planka, prompt: ("Fixed it.\nSTATUS: waiting", True))
+    b.work("c1")
+    assert b.planka.role() == "review"
+    assert "independent review" in b.planka.comments[-1]["text"]
+
+
+def test_edits_work_ignores_notes():
+    def edit(path):
+        return {"type": "tool_use", "name": "Edit", "input": {"file_path": str(path)}}
+
+    assert pb.edits_work(edit(pb.REPO / "scripts" / "x.py"))
+    assert not pb.edits_work(edit(pb.REPO / "memory" / "task.md"))
+    assert not pb.edits_work({"type": "tool_use", "name": "Bash", "input": {"command": "ls"}})

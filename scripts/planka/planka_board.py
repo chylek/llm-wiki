@@ -188,12 +188,15 @@ To attach files (screenshots, renders, PDFs) to the card, put one line
 Don't wait on background tasks: run things in the foreground; only your final
 message is posted, so it must hold the whole answer.
 The last line must be exactly one of:
-- `STATUS: waiting`  - your turn is over, the user acts next.
+- `STATUS: review`   - the default whenever this turn changed files, code,
+  config or a system (memory/ and raw/ notes don't count): an independent
+  reviewer checks the result (up to {MAX_REVIEW} reviews) and hands the card
+  to the user or sends notes back to you. Ending with waiting after editing
+  files sends it to review anyway.
+- `STATUS: waiting`  - only for answers, questions or decisions for the user,
+  or when nothing was changed.
 - `STATUS: continue` - not finished; you are re-run in this same session
   (up to {MAX_WORK} passes per user turn), put a short progress note above.
-- `STATUS: review`   - you think it's done but want an independent reviewer
-  to check (up to {MAX_REVIEW} reviews); it hands the card to the user or
-  sends notes back to you.
 Never move a card to Done or Parked: only the user does that."""
 
 
@@ -259,6 +262,21 @@ def new_user_comments(comments: list[dict[str, Any]], bot_id: str, seen: str) ->
         last_bot = max((i for i, c in enumerate(comments) if c["userId"] == bot_id), default=-1)
         return [c for c in comments[last_bot + 1 :] if c["userId"] != bot_id]
     return [c for c in comments if c["userId"] != bot_id and c["createdAt"] > seen]
+
+
+#: Tools whose use means the turn changed files.
+EDIT_TOOLS = {"Edit", "Write", "NotebookEdit"}
+
+
+def edits_work(block: dict[str, Any]) -> bool:
+    """Does a ``tool_use`` block change a work file (anything but memory/ and raw/ notes)?
+
+    Used to make review the default for turns that changed something: when
+    review was opt-in ("ask if you're unsure"), the agent almost never asked.
+    """
+    inp = block.get("input", {})
+    path = str(inp.get("file_path") or inp.get("notebook_path") or "")
+    return block.get("name") in EDIT_TOOLS and not path.startswith((str(REPO / "memory"), str(REPO / "raw")))
 
 
 def needs_agent(list_role: str | None, comments: list[dict[str, Any]], bot_id: str, seen: str = "") -> bool:
@@ -412,8 +430,8 @@ class Bridge:
 
     def run_claude(
         self, card_id: str, prompt: str, sid: str, resume: bool, model: str = "", read_only: bool = False
-    ) -> str:
-        """Run one headless Claude Code turn and return its final text.
+    ) -> tuple[str, bool]:
+        """Run one headless Claude Code turn -> (final text, whether it edited work files).
 
         Output is consumed as ``stream-json`` so progress can be shown while
         it runs: every ``PROGRESS_EVERY`` seconds a single "Working..." comment
@@ -454,6 +472,7 @@ class Bridge:
         progress_id: str | None = None
         result: dict[str, Any] | None = None
         earlier: list[str] = []  # text of results before the last one
+        changed = False
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -468,7 +487,9 @@ class Bridge:
                         earlier.append(split_status(result["result"])[0])
                     result = event
                 if event.get("type") == "assistant":
-                    steps += [step_line(b) for b in event["message"].get("content", []) if b.get("type") == "tool_use"]
+                    tools = [b for b in event["message"].get("content", []) if b.get("type") == "tool_use"]
+                    steps += [step_line(b) for b in tools]
+                    changed = changed or any(edits_work(b) for b in tools)
                 if len(steps) > shown and time.time() - last_post >= PROGRESS_EVERY:
                     shown, last_post = len(steps), time.time()
                     text = (
@@ -495,10 +516,10 @@ class Bridge:
             return (
                 f"Run failed (no result, exit code {proc.returncode}); session {sid}.\n"
                 f"{tail and f'stderr: {tail}'}\n\nSTATUS: waiting"
-            )
+            ), False
         if result.get("is_error"):
-            return f"Run failed: {result.get('result')}\n\nSTATUS: waiting"
-        return "\n\n".join([*earlier, result["result"]])
+            return f"Run failed: {result.get('result')}\n\nSTATUS: waiting", False
+        return "\n\n".join([*earlier, result["result"]]), changed
 
     # -- prompts ------------------------------------------------------------
 
@@ -609,7 +630,10 @@ information from the user, ask for it and stop.
         budget = f"(Pass {counters['work']}/{MAX_WORK}, reviews so far {counters['review']}/{MAX_REVIEW}.)"
         prompt += f"{ask_label}\n\n{budget}"
 
-        text, status, attach, label = split_status(self.run_claude(card_id, prompt, sid, resume, model))
+        reply, changed = self.run_claude(card_id, prompt, sid, resume, model)
+        text, status, attach, label = split_status(reply)
+        if status == "waiting" and changed and counters["review"] < MAX_REVIEW:
+            status, text = "review", text + "\n\n(Files changed: sent to an independent review.)"
 
         # Budgets: when exhausted, hand the card to the human instead of looping.
         if status == "continue" and counters["work"] >= MAX_WORK:
@@ -656,7 +680,7 @@ information from the user, ask for it and stop.
             f"Thread (the last author comment is the claim to check):\n{thread}"
         )
         # A new random session each round: the reviewer must not inherit context.
-        out = self.run_claude(card["id"], prompt, str(uuid.uuid4()), False, model, read_only=True)
+        out, _ = self.run_claude(card["id"], prompt, str(uuid.uuid4()), False, model, read_only=True)
         verdict, findings = parse_verdict(out)
         self.comment(card["id"], f"🔍 Review {counters['review']}/{MAX_REVIEW}: {verdict}\n\n{findings}")
         if verdict == "rework":  # notes go to the author's next pass, with a fresh pass budget
